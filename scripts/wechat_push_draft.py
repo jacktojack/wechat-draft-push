@@ -34,6 +34,7 @@
 
 import json
 import os
+import re
 import sys
 import urllib.request
 import urllib.error
@@ -96,9 +97,30 @@ def upload_image(access_token, image_path):
 
 def extract_body(html):
     """提取 <body>...</body> 内容作为图文正文（微信 content 接受 HTML 片段）。"""
-    import re
     m = re.search(r"<body[^>]*>(.*?)</body>", html, re.S | re.I)
     return m.group(1).strip() if m else html
+
+
+def upload_and_replace_images(content, access_token, base_dir):
+    """扫描正文中的本地内嵌图片（src 指向 wechat_extracted_media/...），
+    逐张上传为微信永久素材并替换为返回的 url；非本地图片（http/data）跳过。"""
+    def repl(m):
+        full = m.group(0)
+        src = m.group(1)
+        if src.startswith(("http://", "https://", "data:")):
+            return full
+        local = os.path.join(base_dir, src)
+        if not os.path.exists(local):
+            print(f"      [警告] 内嵌图片不存在，保留原引用：{local}")
+            return full
+        resp = upload_image(access_token, local)
+        if "url" not in resp:
+            print(f"      [警告] 内嵌图片上传失败，保留原引用：{src} -> {resp}")
+            return full
+        print(f"      内嵌图片已上传：{src}")
+        return full.replace(f'src="{src}"', f'src="{resp["url"]}"')
+
+    return re.sub(r'<img\b[^>]*\ssrc="([^"]+)"', repl, content, flags=re.I)
 
 
 def build_image_content(image_urls):
@@ -177,6 +199,8 @@ def main():
         print(f"      文档模式：源文件 {src}（自动识别后缀，MD/WORD/EXCEL/CSV/HTML 均可）")
         html_text = convert_to_html(src_path)
         content = extract_body(html_text)
+        # 自动提取并上传正文内嵌图片（convert.py 落地在 <源目录>/wechat_extracted_media/）
+        content = upload_and_replace_images(content, access_token, os.path.dirname(src_path))
         print(f"      正文长度：{len(content)} 字符")
 
     print("[4/4] 调用草稿箱接口 draft/add ...")

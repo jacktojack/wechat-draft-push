@@ -6,9 +6,10 @@
 仅使用 Python 标准库（zipfile + xml.etree + csv + re），零第三方依赖。
 转换产物为带 <body> 的 HTML 片段，供 wechat_push_draft.py 的 extract_body 提取。
 
-注意（第一批范围）：
-- DOCX / XLSX 内的嵌入图片暂不自动提取上传，仅转换文字与表格。
-- 若源文件含重要图片，请先告诉我，我们再扩展图片上传环节。
+图片处理（已支持自动提取）：
+- DOCX / XLSX 内的嵌入图片会自动提取，落地为 <源文件目录>/wechat_extracted_media/ 下的本地文件，
+  并在正文 HTML 中以相对路径 <img> 引用。推送时由 wechat_push_draft.py 自动上传为微信永久素材并替换为 url。
+- DOCX 图片按文档顺序精确嵌入；XLSX 图片统一附于表格之后（XLSX 不支持图片与单元格精确绑定）。
 """
 
 import csv
@@ -244,36 +245,72 @@ def convert_md(text):
 
 
 # ================= DOCX =================
-def _docx_runs(p):
+def _docx_run_text(r):
+    """从单个 w:r 提取带加粗/斜体的文本。"""
+    rpr = r.find(w("rPr"))
+    b = i = False
+    if rpr is not None:
+        if rpr.find(w("b")) is not None:
+            b = True
+        if rpr.find(w("i")) is not None:
+            i = True
+    t = r.find(w("t"))
+    txt = _esc(t.text) if (t is not None and t.text) else ""
+    if b and i:
+        txt = f"<strong><em>{txt}</em></strong>"
+    elif b:
+        txt = f"<strong>{txt}</strong>"
+    elif i:
+        txt = f"<em>{txt}</em>"
+    return txt
+
+
+def _docx_extract_drawing(drawing, media_dir):
+    """从 w:drawing 提取内嵌图片，落地到 media_dir，返回 <img> 标签或 ''。"""
+    emb = None
+    for el in drawing.iter():
+        tag = el.tag.split("}")[-1]
+        if tag == "blip":
+            emb = el.get(rns("embed"))
+            if emb:
+                break
+    if not emb:
+        return ""
+    # relmap 在 convert_docx 中已把 rId 映射为 media 文件名
+    fname = RELMAP.get(emb)
+    if not fname:
+        return ""
+    src = os.path.join(media_dir, fname)
+    if not os.path.exists(src):
+        return ""
+    rel = "wechat_extracted_media/" + os.path.basename(fname)
+    return (
+        f'<p style="margin:10px 0;line-height:0;">'
+        f'<img src="{rel}" style="width:100%;max-width:100%;display:block;" '
+        f'data-type="png"></p>'
+    )
+
+
+def _docx_block(container, media_dir):
+    """处理段落或单元格内的 run 文本与图片，按文档顺序串联。"""
     parts = []
-    for r in p.findall(w("r")):
-        rpr = r.find(w("rPr"))
-        b = i = False
-        if rpr is not None:
-            if rpr.find(w("b")) is not None:
-                b = True
-            if rpr.find(w("i")) is not None:
-                i = True
-        t = r.find(w("t"))
-        txt = _esc(t.text) if (t is not None and t.text) else ""
-        if b and i:
-            txt = f"<strong><em>{txt}</em></strong>"
-        elif b:
-            txt = f"<strong>{txt}</strong>"
-        elif i:
-            txt = f"<em>{txt}</em>"
-        parts.append(txt)
+    for child in container:
+        tag = child.tag.split("}")[-1]
+        if tag == "r":
+            parts.append(_docx_run_text(child))
+        elif tag == "drawing":
+            parts.append(_docx_extract_drawing(child, media_dir))
     return "".join(parts)
 
 
-def _docx_paragraph(p):
+def _docx_paragraph(p, media_dir):
     style = None
     ppr = p.find(w("pPr"))
     if ppr is not None:
         pstyle = ppr.find(w("pStyle"))
         if pstyle is not None:
             style = pstyle.get(w("val"))
-    text = _docx_runs(p)
+    text = _docx_block(p, media_dir)
     if not text.strip():
         return ""
     if style and re.search(r"(\d)", style):
@@ -286,14 +323,14 @@ def _docx_paragraph(p):
     return f'<p style="margin:10px 0;line-height:1.9;">{text}</p>'
 
 
-def _docx_table(tbl):
+def _docx_table(tbl, media_dir):
     html_rows = []
     for ri, tr in enumerate(tbl.findall(w("tr"))):
         tds = []
         for tc in tr.findall(w("tc")):
             txts = []
             for p in tc.findall(w("p")):
-                txts.append(_docx_runs(p))
+                txts.append(_docx_block(p, media_dir))
             cell = " ".join(txts)
             st = "border:1px solid #ddd;padding:8px 10px;"
             if ri == 0:
@@ -306,9 +343,47 @@ def _docx_table(tbl):
     )
 
 
+def _docx_build_relmap(z):
+    """读取 word/_rels/document.xml.rels，返回 {rId: media文件名}。"""
+    try:
+        rels_xml = z.read("word/_rels/document.xml.rels").decode("utf-8")
+    except KeyError:
+        return {}
+    try:
+        rels = ET.fromstring(rels_xml)
+    except ET.ParseError:
+        return {}
+    relmap = {}
+    for rel in rels:
+        rid = rel.get("Id")
+        target = rel.get("Target", "")
+        if target:
+            relmap[rid] = os.path.basename(target)
+    return relmap
+
+
+def _docx_extract_media(z, media_dir):
+    """解压 word/media/* 到 media_dir。"""
+    os.makedirs(media_dir, exist_ok=True)
+    for name in z.namelist():
+        if name.startswith("word/media/") and not name.endswith("/"):
+            data = z.read(name)
+            with open(os.path.join(media_dir, os.path.basename(name)), "wb") as f:
+                f.write(data)
+
+
+# 模块级缓存：convert_docx 调用期间存放 rId→media 文件名映射，供 _docx_extract_drawing 使用
+RELMAP = {}
+
+
 def convert_docx(path):
+    media_dir = os.path.join(os.path.dirname(os.path.abspath(path)), "wechat_extracted_media")
     with zipfile.ZipFile(path) as z:
+        relmap = _docx_build_relmap(z)
+        _docx_extract_media(z, media_dir)
         xml = z.read("word/document.xml").decode("utf-8")
+    global RELMAP
+    RELMAP = relmap
     root = ET.fromstring(xml)
     body = root.find(w("body"))
     if body is None:
@@ -317,9 +392,9 @@ def convert_docx(path):
     for child in body:
         tag = child.tag.split("}")[-1]
         if tag == "p":
-            out.append(_docx_paragraph(child))
+            out.append(_docx_paragraph(child, media_dir))
         elif tag == "tbl":
-            out.append(_docx_table(child))
+            out.append(_docx_table(child, media_dir))
     return wrap_html("\n".join(out))
 
 
@@ -334,8 +409,19 @@ def _split_ref(ref):
 
 
 def convert_xlsx(path):
+    media_dir = os.path.join(os.path.dirname(os.path.abspath(path)), "wechat_extracted_media")
+    media_imgs = []
     with zipfile.ZipFile(path) as z:
         names = z.namelist()
+        # 提取内嵌图片（统一附于表格之后）
+        for name in names:
+            if name.startswith("xl/media/") and not name.endswith("/"):
+                os.makedirs(media_dir, exist_ok=True)
+                data = z.read(name)
+                bname = os.path.basename(name)
+                with open(os.path.join(media_dir, bname), "wb") as f:
+                    f.write(data)
+                media_imgs.append(bname)
         shared = []
         if "xl/sharedStrings.xml" in names:
             sx = ET.fromstring(z.read("xl/sharedStrings.xml"))
@@ -399,7 +485,17 @@ def convert_xlsx(path):
                 + "</table>"
             )
             tables.append(tbl)
-    return wrap_html("\n".join(tables))
+    parts = list(tables)
+    if media_imgs:
+        parts.append('<p style="font-weight:bold;margin:14px 0 6px;">内嵌图片</p>')
+        for bname in media_imgs:
+            rel = "wechat_extracted_media/" + bname
+            parts.append(
+                f'<p style="margin:10px 0;line-height:0;">'
+                f'<img src="{rel}" style="width:100%;max-width:100%;display:block;" '
+                f'data-type="png"></p>'
+            )
+    return wrap_html("\n".join(parts))
 
 
 # ================= CSV =================
