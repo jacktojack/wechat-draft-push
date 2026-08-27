@@ -1,0 +1,11 @@
+{
+  "appid": "你的公众号AppID",
+  "appsecret": "你的公众号AppSecret",
+  "source_file": "article.md",
+  "cover_image": "cover.png",
+  "cover_size": "900x383",
+  "cover_prompt": "",
+  "title": "文章标题",
+  "author": "作者名",
+  "digest": "摘要，显示在公众号列表"
+}
