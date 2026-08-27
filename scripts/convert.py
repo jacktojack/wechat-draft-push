@@ -477,14 +477,21 @@ def convert_xlsx(path):
                         st += "background:#f3f6fb;font-weight:bold;"
                     tds.append(f'<td style="{st}">{v}</td>')
                 rows_html.append("<tr>" + "".join(tds) + "</tr>")
-            tbl = (
+            table = (
                 f'<p style="font-weight:bold;margin:14px 0 6px;">{_esc(name)}</p>'
                 '<table style="border-collapse:collapse;width:100%;margin:8px 0 16px;'
                 'font-size:14px;word-break:break-word;">'
                 + "".join(rows_html)
                 + "</table>"
             )
-            tables.append(tbl)
+            # 宽表防护：用横向滚动容器包裹，避免撑破手机端页面布局
+            scroll = (
+                '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;'
+                'width:100%;max-width:100%;">'
+                + table
+                + "</div>"
+            )
+            tables.append(scroll)
     parts = list(tables)
     if media_imgs:
         parts.append('<p style="font-weight:bold;margin:14px 0 6px;">内嵌图片</p>')
@@ -516,7 +523,7 @@ def convert_csv(path):
             f'<td style="border:1px solid #ddd;padding:8px 10px;">{_esc(c)}</td>' for c in r
         )
         trs.append(f"<tr>{tds}</tr>")
-    tbl = (
+    table = (
         '<table style="border-collapse:collapse;width:100%;margin:12px 0;'
         'font-size:14px;word-break:break-word;"><thead><tr>'
         + th
@@ -524,7 +531,14 @@ def convert_csv(path):
         + "".join(trs)
         + "</tbody></table>"
     )
-    return wrap_html(tbl)
+    # 宽表防护：用横向滚动容器包裹，避免撑破手机端页面布局
+    scroll = (
+        '<div style="overflow-x:auto;-webkit-overflow-scrolling:touch;'
+        'width:100%;max-width:100%;">'
+        + table
+        + "</div>"
+    )
+    return wrap_html(scroll)
 
 
 # ================= 提取作者 =================
