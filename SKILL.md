@@ -21,7 +21,7 @@ agent_created: true
 4. 一张**封面图**（JPG/PNG，建议 < 2MB，如 900×383）——若未提供，技能会用 ImageGen **根据文章内容自动生成风格匹配、极简美观的封面**（无需你指定风格）
 
 ## 工作流程
-1. 基于 `scripts/wechat_config.example.json` 创建 `wechat_config.json`，填入 `appid`/`appsecret`/`html_file`/`cover_image`/`title` 等。
+1. 基于 `scripts/wechat_config.example.json` 创建 `wechat_config.json`，填入 `appid`/`appsecret`/`cover_image`/`title` 等。`author` 留空则自动从源文件提取（见下「作者自动提取」），`default_author` 为兜底署名（默认「龙猫爸爸」）。
 2. 准备封面图（自动优先，缺失时按内容风格生成）：
    - 若配置 `cover_image` 指向的文件**已存在**，直接用；
    - 若**不存在**，由 AI 代理调用 **ImageGen 工具**自动生成：
@@ -69,6 +69,15 @@ agent_created: true
 - **用户指定优先**：若 `cover_prompt` 非空，则直接用用户给定的提示词（覆盖自动推断）。
 - 规格：按 `cover_size`（默认 900×383）生成，保存为 `cover_image` 路径（如 `cover.png`）。
 - 兜底：ImageGen 不可用或失败时，向用户索取本地封面图并复制到位，再继续推送。
+
+## 作者自动提取
+- 优先级：`author`（配置显式指定） > 源文件提取 > `default_author`（兜底，默认「龙猫爸爸」）。
+- 源文件提取规则（由 `convert.extract_author` 实现，仅文档模式生效）：
+  - `.md`：文首/文末 `author: xxx` 或 `作者：xxx`（大小写、全/半角冒号均可）
+  - `.html`：`<meta name="author" content="xxx">`，或文中 `作者：xxx`
+  - `.docx`：document.xml 中 `作者：xxx`
+  - `.xlsx` / `.csv`：无作者概念，跳过提取
+- 图片列表模式（`image_files`）无源文件，直接使用 `author` 或 `default_author`。
 
 ## 封面风格推断参考
 统一约束（所有主题）：极简克制、大量留白、无水印无文字无 logo、高级质感、抽象隐喻优先（避免写实大图）。比例按 `cover_size`（默认 900×383）。

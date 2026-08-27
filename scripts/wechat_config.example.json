@@ -6,6 +6,7 @@
   "cover_size": "900x383",
   "cover_prompt": "",
   "title": "文章标题",
-  "author": "作者名",
+  "author": "",
+  "default_author": "龙猫爸爸",
   "digest": "摘要，显示在公众号列表"
 }

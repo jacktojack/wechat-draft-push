@@ -390,6 +390,46 @@ def convert_csv(path):
     return wrap_html(tbl)
 
 
+# ================= 提取作者 =================
+def extract_author(path):
+    """从源文件提取作者名，提取不到返回 None。
+
+    支持：
+    - MD：文首/文末 `author: xxx` 或 `作者：xxx`（大小写/全半角冒号均可）
+    - HTML：<meta name="author" content="xxx">，或文中 `作者：xxx`
+    - DOCX：在 document.xml 中搜索 `作者：xxx`
+    - XLSX / CSV：无作者概念，返回 None
+    """
+    ext = os.path.splitext(path)[1].lower()
+    try:
+        if ext == ".md":
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            m = re.search(r"^(?:author|作者)\s*[:：]\s*(.+)$", text, re.I | re.M)
+            if m:
+                return m.group(1).strip().strip("*").strip()
+        elif ext in (".html", ".htm"):
+            with open(path, encoding="utf-8") as f:
+                text = f.read()
+            m = re.search(
+                r'<meta\s+name=["\']author["\']\s+content=["\']([^"\']+)["\']',
+                text, re.I,
+            )
+            if not m:
+                m = re.search(r"^(?:author|作者)\s*[:：]\s*(.+)$", text, re.I | re.M)
+            if m:
+                return m.group(1).strip()
+        elif ext == ".docx":
+            with zipfile.ZipFile(path) as z:
+                xml = z.read("word/document.xml").decode("utf-8")
+            m = re.search(r"作者\s*[:：]\s*([^<>\n]{1,30})", xml)
+            if m:
+                return m.group(1).strip()
+    except Exception:
+        return None
+    return None
+
+
 # ================= 调度 =================
 def convert_to_html(path):
     ext = os.path.splitext(path)[1].lower()

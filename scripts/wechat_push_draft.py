@@ -16,7 +16,8 @@
   "cover_size": "900x383",
   "cover_prompt": "",  # 留空=按文章内容自动匹配风格；非空=用指定提示词
   "title": "文章标题",
-  "author": "龙猫爸爸",
+  "author": "",                   # 留空=自动提取（MD/HTML/DOCX 文末"作者：xxx"）；非空则强制使用
+  "default_author": "龙猫爸爸",   # author 留空且提取不到时的兜底署名
   "digest": "摘要",
 
   "source_file": "article.md",
@@ -41,7 +42,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, "wechat_config.json")
 
 sys.path.insert(0, BASE)
-from convert import convert_to_html  # noqa: E402
+from convert import convert_to_html, extract_author  # noqa: E402
 
 
 def load_config():
@@ -145,6 +146,7 @@ def main():
     print(f"      封面 media_id: {thumb_media_id}")
 
     print("[3/4] 准备正文 HTML ...")
+    src_path = None
     image_files = cfg.get("image_files")
     if image_files:
         print(f"      图片模式：共 {len(image_files)} 张图待上传")
@@ -179,9 +181,16 @@ def main():
 
     print("[4/4] 调用草稿箱接口 draft/add ...")
     draft_url = f"https://api.weixin.qq.com/cgi-bin/draft/add?access_token={access_token}"
+    # 作者：配置显式指定 > 源文件自动提取 > 兜底默认值
+    author = cfg.get("author")
+    if not author and src_path:
+        author = extract_author(src_path)
+    if not author:
+        author = cfg.get("default_author", "龙猫爸爸")
+
     article = {
         "title": cfg.get("title", "未命名图文"),
-        "author": cfg.get("author", ""),
+        "author": author,
         "digest": cfg.get("digest", ""),
         "content": content,
         "thumb_media_id": thumb_media_id,
