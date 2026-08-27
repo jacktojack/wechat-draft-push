@@ -109,6 +109,59 @@ def _build_table(header, rows):
     )
 
 
+def _md_parse_list(lines, start, n):
+    """解析从 start 开始的列表块（支持基于缩进的嵌套 ul/ol），返回 (html, next_index)。"""
+
+    def build(i, base_indent):
+        nodes = []  # 每项: (tag, content, children)
+        while i < n:
+            line = lines[i]
+            m = re.match(r"^(\s*)([-*+]|\d+[.)])\s+(.*)$", line)
+            if not m:
+                # 允许列表项之间有空行（下一行仍是列表则跳过空行）
+                if line.strip() == "" and i + 1 < n and re.match(
+                    r"^(\s*)([-*+]|\d+[.)])\s+", lines[i + 1]
+                ):
+                    i += 1
+                    continue
+                break
+            indent = len(m.group(1))
+            tag = "ol" if re.match(r"^\d+[.)]$", m.group(2)) else "ul"
+            content = m.group(3)
+            if nodes and indent < base_indent:
+                break
+            if not nodes:
+                base_indent = indent
+            i += 1
+            children = []
+            if i < n:
+                nm = re.match(r"^(\s*)([-*+]|\d+[.)])\s+", lines[i])
+                if nm and len(nm.group(1)) > indent:
+                    children, i = build(i, len(nm.group(1)))
+            nodes.append((tag, content, children))
+        return nodes, i
+
+    def render(nodes):
+        if not nodes:
+            return ""
+        cur_tag = nodes[0][0]
+        buf = [f'<{cur_tag} style="padding-left:22px;margin:8px 0;">']
+        for tag, content, children in nodes:
+            if tag != cur_tag:
+                buf.append(f"</{cur_tag}>")
+                cur_tag = tag
+                buf.append(f'<{tag} style="padding-left:22px;margin:8px 0;">')
+            buf.append(f'<li style="margin:4px 0;">{_md_inline(content)}')
+            if children:
+                buf.append(render(children))
+            buf.append("</li>")
+        buf.append(f"</{cur_tag}>")
+        return "".join(buf)
+
+    tree, ni = build(start, -1)
+    return render(tree), ni
+
+
 def convert_md(text):
     lines = text.split("\n")
     out = []
@@ -170,21 +223,9 @@ def convert_md(text):
                 i += 1
             out.append(_build_table(header, rows))
             continue
-        if re.match(r"^\s*[-*+]\s+", line):
-            buf = []
-            while i < n and re.match(r"^\s*[-*+]\s+", lines[i]):
-                item = re.sub(r"^\s*[-*+]\s+", "", lines[i])
-                buf.append(f'<li style="margin:4px 0;">{_md_inline(item)}</li>')
-                i += 1
-            out.append('<ul style="padding-left:22px;margin:10px 0;">' + "".join(buf) + "</ul>")
-            continue
-        if re.match(r"^\s*\d+\.\s+", line):
-            buf = []
-            while i < n and re.match(r"^\s*\d+\.\s+", lines[i]):
-                item = re.sub(r"^\s*\d+\.\s+", "", lines[i])
-                buf.append(f'<li style="margin:4px 0;">{_md_inline(item)}</li>')
-                i += 1
-            out.append('<ol style="padding-left:22px;margin:10px 0;">' + "".join(buf) + "</ol>")
+        if re.match(r"^(\s*)([-*+]|\d+[.)])\s+", line):
+            html, i = _md_parse_list(lines, i, n)
+            out.append(html)
             continue
         if not line.strip():
             i += 1
