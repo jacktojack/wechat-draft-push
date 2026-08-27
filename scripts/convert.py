@@ -55,7 +55,21 @@ def wrap_html(inner):
 
 # ================= Markdown =================
 def _md_inline(text):
+    # 先把 HTML 式删除线标签 <s>/<del> 保留为带样式的占位符，避免被 _esc 破坏
+    placeholders = []
+    def stash_html_strike(m):
+        placeholders.append(m.group(2))
+        return f"\x00STRIKE{len(placeholders)-1}\x00"
+    text = re.sub(r"</?(s|del)(?:\s[^>]*)?>([^<]+)</\1>", stash_html_strike, text, flags=re.I)
+
     text = _esc(text)
+
+    # 恢复 HTML 式删除线为统一样式
+    def restore_strike(m):
+        idx = int(m.group(1))
+        return f'<del style="text-decoration:line-through;color:#999;">{placeholders[idx]}</del>'
+    text = re.sub(r"\x00STRIKE(\d+)\x00", restore_strike, text)
+
     text = re.sub(
         r"`([^`]+)`",
         r'<code style="background:#f5f5f5;padding:2px 4px;border-radius:3px;font-size:13px;">\1</code>',
@@ -63,7 +77,11 @@ def _md_inline(text):
     )
     text = re.sub(r"\*\*([^*]+)\*\*", r"<strong>\1</strong>", text)
     text = re.sub(r"(?<!\*)\*([^*]+)\*(?!\*)", r"<em>\1</em>", text)
-    text = re.sub(r"~~([^~]+)~~", r"<del>\1</del>", text)
+    text = re.sub(
+        r"~~([^~]+)~~",
+        r'<del style="text-decoration:line-through;color:#999;">\1</del>',
+        text,
+    )
     text = re.sub(r"\[([^\]]+)\]\(([^)]+)\)", r'<a href="\2">\1</a>', text)
     return text
 
@@ -129,6 +147,15 @@ def _md_parse_list(lines, start, n):
             indent = len(m.group(1))
             tag = "ol" if re.match(r"^\d+[.)]$", m.group(2)) else "ul"
             content = m.group(3)
+            # 任务列表：已勾选 [x]/[X] 加删除线，未勾选 [ ] 显示为未勾选框
+            tm = re.match(r"^\[([xX ])\]\s*(.*)", content)
+            if tm:
+                mark = "☑" if tm.group(1).strip().lower() == "x" else "☐"
+                rest = tm.group(2)
+                if tm.group(1).strip().lower() == "x":
+                    content = f"{mark} ~~{rest}~~"
+                else:
+                    content = f"{mark} {rest}"
             if nodes and indent < base_indent:
                 break
             if not nodes:
